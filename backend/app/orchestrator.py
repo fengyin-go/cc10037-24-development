@@ -30,7 +30,7 @@ from app.engine.validation_executor import (
     CheckLevel, CheckType, QualityRule, ValidationEngine, ValidationResult,
 )
 from app.engine.watermark_progress import (
-    WatermarkAdvanceResult, WatermarkEngine, WatermarkRecord, WatermarkStatus,
+    WatermarkAdvanceResult, WatermarkEngine, WatermarkRecord,
 )
 
 
@@ -354,44 +354,13 @@ class ETLOrchestrator:
     def pipeline_run_report(
         self,
         pipeline_id: str,
-        watermark: WatermarkRecord,
-        quality_result: QualityGateResponse | None = None,
+        run_id: str,
     ) -> dict[str, Any]:
-        """管线运行综合报告：水位 + 质量 + 告警。"""
-        report: dict[str, Any] = {
-            "pipeline_id": pipeline_id,
-            "timestamp": datetime.now().isoformat(),
-        }
+        """管线运行综合报告：只读取该运行编号下已确认的实际回执。
 
-        # 水位
-        report["watermark"] = {
-            "current": watermark.current_watermark,
-            "delay_minutes": watermark.delay_minutes,
-            "status": watermark.status.value,
-        }
+        固定样本和按当天时钟推算的模拟进度不再参与报告；报告事实来自
+        ``app.services.run_report`` 里的回执与快照。
+        """
+        from app.services.run_report import run_report_service
 
-        # 质量
-        if quality_result:
-            report["quality"] = {
-                "pass": quality_result.overall_pass,
-                "decision": quality_result.decision,
-                "failed_ratio": quality_result.failed_ratio,
-            }
-            report["alerts"] = [
-                {"name": a.rule_name, "level": a.level.value, "message": a.message}
-                for a in quality_result.triggered_alerts if a.matched
-            ]
-
-        # 整体健康评估
-        checks = []
-        if watermark.status in (WatermarkStatus.DELAYED, WatermarkStatus.SEVERE):
-            checks.append("水位延迟")
-        if quality_result and not quality_result.overall_pass:
-            checks.append("质量门禁不通过")
-        if report.get("alerts"):
-            checks.append("有未处理告警")
-
-        report["health"] = "healthy" if not checks else "degraded" if len(checks) <= 2 else "critical"
-        report["issues"] = checks
-
-        return report
+        return run_report_service.get_run_report(pipeline_id, run_id)

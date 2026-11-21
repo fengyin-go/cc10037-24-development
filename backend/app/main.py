@@ -5,15 +5,31 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.orchestrator import ETLOrchestrator  # noqa: E402 提前实例化以便业务API使用
 from app.routers import ROUTERS
+from app.seed_run_reports import seed_run_reports
+from app.services.run_report import run_report_service
 from app.store import store
 
-app = FastAPI(title="ETL编排与数据质量中心", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """启动时建表并补齐两个实际订单批次；已有数据不会被覆盖。"""
+    run_report_service.db.initialize()
+    seed_run_reports(run_report_service)
+    yield
+
+
+app = FastAPI(
+    title="ETL编排与数据质量中心", version="1.0.0", lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,

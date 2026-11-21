@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.engine.alert_matcher import AlertLevel, AlertRule
 from app.engine.backfill_plan import BackfillEngine
@@ -315,34 +315,29 @@ def analyze_dag(body: dict[str, Any]) -> dict[str, Any]:
 # ---- 综合管线运行报告 ----
 
 @router.get("/pipelines/{pipeline_id}/run-report")
-def pipeline_run_report(pipeline_id: str) -> dict[str, Any]:
-    """获取管线的综合运行报告。"""
-    # 模拟生成运行报告
-    from datetime import datetime
+def pipeline_run_report(
+    pipeline_id: str,
+    run_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """获取管线某次实际运行的综合报告。
 
-    record = WatermarkRecord(
-        pipeline_id=pipeline_id,
-        partition_field="dt",
-        current_watermark=datetime.now().strftime("%Y-%m-%d"),
-        scheduled_time=datetime.now(),
-        delay_minutes=0,
-        status=WatermarkStatus.NORMAL,
-    )
+    报告只从已登记的回执（质量门禁、分区进度）计算，不再使用固定样本
+    或“当天”的模拟进度。指定 run_id 时会先核验该运行编号确实属于本管线；
+    未指定时返回该管线最近一次运行的报告，并在响应中明确 run_id。
+    """
+    from app.services.run_report import RunNotFoundError, run_report_service
 
-    # 模拟质量结果
-    quality = _orchestrator.run_quality_gate(
-        pipeline_id,
-        [
-            QualityRule(
-                rule_id="r_default",
-                rule_name="默认非空检查",
-                target_table=f"dw.{pipeline_id}",
-                check_field="id",
-                check_type=CheckType.NOT_NULL,
-                threshold=0.01,
-            ),
-        ],
-        [{"id": "001"}, {"id": None}],
-    )
+    if run_id is not None:
+        try:
+            pipeline_id = run_report_service.resolve_pipeline(run_id, pipeline_id)
+            return run_report_service.get_run_report(pipeline_id, run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
-    return _orchestrator.pipeline_run_report(pipeline_id, record, quality)
+    runs = run_report_service.list_runs(pipeline_id=pipeline_id)
+    if not runs:
+        raise HTTPException(
+            status_code=404,
+            detail=f"管线 {pipeline_id} 还没有登记实际运行，无法生成报告",
+        )
+    return run_report_service.get_run_report(pipeline_id, runs[0]["run_id"])

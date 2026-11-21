@@ -5,6 +5,10 @@ services:
       - "8000:8000"
     environment:
       - APP_ENV=local
+      # 回执与已确认报告落在命名卷上，容器重建后仍可回看。
+      - RUN_REPORT_DB=/srv/app/var/run_reports.sqlite3
+    volumes:
+      - run-report-data:/srv/app/var
   frontend:
     build: ./frontend
     ports:
@@ -14,3 +18,6 @@ services:
       VITE_PROXY_TARGET: http://backend:8000
     depends_on:
       - backend
+
+volumes:
+  run-report-data:

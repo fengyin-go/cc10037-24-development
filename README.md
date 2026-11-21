@@ -11,11 +11,15 @@
 .
 ├── frontend/                 Vue 3 + Vite + TypeScript 前端
 │   ├── src/views/WorkbenchView.vue|tsx  全部模块共享工作台
+│   ├── src/views/RunReportView.vue      综合运行报告（按运行编号复核回执）
 │   ├── src/data/modules.ts              18个业务模块配置
 │   ├── src/api/              统一请求封装
 │   └── vite.config.ts        dev server 配置（open: false）
 ├── backend/                  FastAPI（Python） 后端
 │   ├── app/routers/resource.py  通用查询/导出/登记/动作接口
+│   ├── app/routers/run_report.py 运行回执与综合报告接口
+│   ├── app/engine/run_report.py  回执归一化与报告计算（纯计算）
+│   ├── app/services/run_report.py 回执/报告持久化（SQLite）
 │   ├── app/services/<key>.py    每个模块独立领域逻辑
 │   ├── app/services/base.py     共享服务骨架
 │   └── app/store.py          内存数据仓库与示例数据
@@ -68,6 +72,43 @@ npm run dev
 | 回填追踪 | `backfill_tracker` | 回填进度 | 追踪ID、回填任务、当前分区 |
 | 成本分析 | `cost_analysis` | 成本快照 | 快照日期、管线标识、计算时长 |
 | 告警策略 | `alert_policy` | 告警规则 | 规则名称、监控对象、告警条件 |
+
+## 综合运行报告
+
+综合报告按“管线 + 运行编号”关联实际运行回执，不再使用固定样本和按当天时钟
+推算的模拟进度。一次运行会先后收到两份回执：
+
+| 回执 | `receipt_type` | 来源 |
+| --- | --- | --- |
+| 质量门禁回执 | `quality_gate` | 质量执行批次（可引用 `validation_run_id` 与库内记录逐项核对） |
+| 分区进度回执 | `partition_progress` | 逐分区实际通过/失败行数与完成度 |
+
+关键约束：
+
+- 回执按 `(pipeline_id, run_id)` 落库；重复登记或重复投递不会多记一条运行。
+  回执内容有修订时保留历史版本，报告只取最新一版。
+- 所有证据必须属于同一轮：回执日期、分区日期、质量执行记录的校验分区都要与
+  运行日期一致，否则返回 409 且不写库，杜绝拼接两个日期的数据。
+- 门禁汇总与分区汇总的行数必须自洽；不一致时报告状态为 `inconsistent`，不允许发布。
+- 只有 `state=complete` 的完整报告能发布为确认快照；确认后补入新回执只更新
+  “当前视图”，已确认快照单独留存，可按 `report_id` 回看。
+- 进程重启后库表仍在（SQLite，默认 `backend/var/run_reports.sqlite3`，
+  可用环境变量 `RUN_REPORT_DB` 改路径）；启动时只会补齐缺失的演示批次。
+
+接口：
+
+```text
+POST /api/runs                                     登记运行（幂等）
+GET  /api/runs                                     运行清单 + 已收到/缺少的回执
+POST /api/runs/{run_id}/receipts                   按运行编号提交实际回执
+GET  /api/runs/{run_id}/report                     当前综合报告（核验运行编号归属）
+POST /api/runs/{run_id}/report/confirm             发布完整报告
+GET  /api/runs/{run_id}/report/confirmed           读取已确认报告（可带 report_id）
+GET  /api/business/pipelines/{pipeline_id}/run-report?run_id=…   管线维度兼容入口
+```
+
+内置两批实际订单运行（`ORD-RUN-20261118` 已确认，`ORD-RUN-20261117` 只有门禁回执），
+前端“综合运行报告”页面可以直接复核“上次完整结果 + 当前实际回执”。
 
 ## 约定
 
